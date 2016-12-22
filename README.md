@@ -31,9 +31,9 @@ Development dependencies:
 Example Playbook
 ----------------
 
-    - hosts: servers
-      roles:
-         - { role: amaabca.newrelic-inode-plugin }
+     - { role: ansible-newrelic-inode-plugin, 
+           newrelic_inode_plugin_license_key: "{{ secrets.newrelic_license }}", 
+           newrelic_inode_plugin_hostname: "{{ hostvars[inventory_hostname]['ansible_default_ipv4']['address'] }}" }
 
 License
 -------

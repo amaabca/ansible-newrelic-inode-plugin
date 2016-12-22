@@ -12,6 +12,12 @@
   register: git_clone
   until: git_clone|succeeded
 
+- name: install script requirements (the repo should really be packaged as a gem)
+  command: bundle install
+  args:
+    chdir: "{{ newrelic_inode_plugin_destination }}"
+  when: true
+
 - name: Use template as the basis for the config file
   file:
    src: "{{ newrelic_inode_plugin_destination }}/config/template_newrelic_plugin.yml"
