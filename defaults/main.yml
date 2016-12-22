@@ -1,2 +1,3 @@
 ---
-# defaults file for ansible-newrelic-inode-plugin
+newrelic_inode_plugin_repository: https://github.com/Foild/newrelic-inode-plugin.git
+newrelic_inode_plugin_destination: /usr/local/bin/newrelic-inode-plugin

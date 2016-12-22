@@ -1,58 +1,66 @@
-# ansible-playbook inode_monitor.yml -i vendor/ec2.py -vvvv --ask-vault-pass
-- name: Add inode monitoring to servers
-  hosts: "{{ target_hosts | default('tag_class_app:&tag_app_environment_staging:&tag_app_name_insurance')}}"
-  become: true
-  user: ubuntu
-  vars_files:
-    - vault.yml
-    - vars.yml
-  tasks:
-   - name: Install inode monitor on server
-     git:
-       repo: https://github.com/Foild/newrelic-inode-plugin.git
-       dest: /usr/local/bin/newrelic-inode-plugin
-       force: yes
+---
+- name: Ensure that the New Relic license key is set
+  fail: msg="Bailing out. this play requires 'newrelic_inode_plugin_license_key'"
+  when: newrelic_inode_plugin_license_key is not defined
 
-   - command: bundle install
-     args:
-       chdir: /usr/local/bin/newrelic-inode-plugin
+- name: Clone github repository (because plugin hasn't been released as a gem) with workaround from ansible/ansible-modules-core#5504
+  git:
+    repo: "{{ newrelic_inode_plugin_repository }}"
+    dest: "{{ newrelic_inode_plugin_destination }}"
+    force: true
+    version: master
+  register: git_clone
+  until: git_clone|succeeded
 
-   - file:
-       src: /usr/local/bin/newrelic-inode-plugin/config/template_newrelic_plugin.yml
-       dest: /usr/local/bin/newrelic-inode-plugin/config/newrelic_plugin.yml
-       state: link
+- name: Use template as the basis for the config file
+  file:
+   src: "{{ newrelic_inode_plugin_destination }}/config/template_newrelic_plugin.yml"
+   dest: "{{ newrelic_inode_plugin_destination }}/config/newrelic_plugin.yml"
+   state: link
 
-   - set_fact:
-       inode_plugin_host_name: "{{ hostvars[inventory_hostname]['ec2_tag_app_name'] }}-{{ hostvars[inventory_hostname]['ec2_tag_app_environment'] }}-{{ hostvars[inventory_hostname]['ansible_default_ipv4']['address'] }}"
+- name: grab the machine hostname
+  command: hostname
+  register: default_hostname
+  when: newrelic_inode_plugin_hostname is undefined
 
-   - lineinfile:
-       dest: /usr/local/bin/newrelic-inode-plugin/config/newrelic_plugin.yml
-       regexp: '^.*license_key\:.*$'
-       line: "  license_key: {{ secrets.newrelic.license }}"
+- name: Set a default hostname (the plugin should have a sane default and this section wouldn't be needed)
+  set_fact:
+    newrelic_inode_plugin_hostname: "{{ default_hostname.stdout }}"
+  when: newrelic_inode_plugin_hostname is undefined
 
-   - lineinfile:
-       dest: /usr/local/bin/newrelic-inode-plugin/config/newrelic_plugin.yml
-       regexp: '^.*hostname:.*$'
-       line: "    hostname: {{ inode_plugin_host_name }}"
+- name: Set hostname as reported to New Relic
+  lineinfile:
+   dest: "{{ newrelic_inode_plugin_destination }}/config/newrelic_plugin.yml"
+   regexp: '^.*hostname:.*$'
+   line: "    hostname: {{ newrelic_inode_plugin_hostname }}"
 
-   - template:
-       src: trusty_newrelic_inode_agent.conf
-       dest: /etc/init/newrelic_inode_agent.conf
-     when: ansible_distribution_release == 'trusty'
+- name: update the New Relic license key
+  lineinfile:
+   dest: "{{ newrelic_inode_plugin_destination }}/config/newrelic_plugin.yml"
+   regexp: '^.*license_key\:.*$'
+   line: "  license_key: {{ newrelic_inode_plugin_license_key }}"
 
-   - template:
-       src: xenial_newrelic_inode_agent.conf
-       dest: /lib/systemd/system/newrelic_inode_agent.service
-     when: ansible_distribution_release == 'xenial'
+- name: Create Upstart config file for Ubuntu 14.04
+  template:
+    src: trusty_newrelic_inode_agent.conf
+    dest: /etc/init/newrelic_inode_agent.conf
+  when: ansible_distribution_release == 'trusty'
 
-   - name: Set the service for xenial servers
-     command: systemctl daemon-reload
-     when: ansible_distribution_release == 'xenial'
+- name: Install systemd config file
+  template:
+    src: xenial_newrelic_inode_agent.conf
+    dest: /lib/systemd/system/newrelic_inode_agent.service
+  when: ansible_distribution_release == 'xenial'
 
-   - name: Set the service for xenial servers
-     command: systemctl enable newrelic_inode_agent.service
-     when: ansible_distribution_release == 'xenial'
+- name: Reload any changes from the config file above
+  command: systemctl daemon-reload
+  when: ansible_distribution_release == 'xenial'
 
-   - service:
-       name: newrelic_inode_agent
-       state: started
+- name: Enable the systemd service
+  command: systemctl enable newrelic_inode_agent.service
+  when: ansible_distribution_release == 'xenial'
+
+- name: Start the newly installed service
+  service:
+    name: newrelic_inode_agent
+    state: started
