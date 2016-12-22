@@ -1,2 +1,72 @@
 ---
-# tasks file for ansible-newrelic-inode-plugin
+- name: Ensure that the New Relic license key is set
+  fail: msg="Bailing out. this play requires 'newrelic_inode_plugin_license_key'"
+  when: newrelic_inode_plugin_license_key is not defined
+
+- name: Clone github repository (because plugin hasn't been released as a gem) with workaround from ansible/ansible-modules-core#5504
+  git:
+    repo: "{{ newrelic_inode_plugin_repository }}"
+    dest: "{{ newrelic_inode_plugin_destination }}"
+    force: true
+    version: master
+  register: git_clone
+  until: git_clone|succeeded
+
+- name: install script requirements (the repo should really be packaged as a gem)
+  command: bundle install
+  args:
+    chdir: "{{ newrelic_inode_plugin_destination }}"
+  when: true
+
+- name: Use template as the basis for the config file
+  file:
+   src: "{{ newrelic_inode_plugin_destination }}/config/template_newrelic_plugin.yml"
+   dest: "{{ newrelic_inode_plugin_destination }}/config/newrelic_plugin.yml"
+   state: link
+
+- name: grab the machine hostname
+  command: hostname
+  register: default_hostname
+  when: newrelic_inode_plugin_hostname is undefined
+
+- name: Set a default hostname (the plugin should have a sane default and this section wouldn't be needed)
+  set_fact:
+    newrelic_inode_plugin_hostname: "{{ default_hostname.stdout }}"
+  when: newrelic_inode_plugin_hostname is undefined
+
+- name: Set hostname as reported to New Relic
+  lineinfile:
+   dest: "{{ newrelic_inode_plugin_destination }}/config/newrelic_plugin.yml"
+   regexp: '^.*hostname:.*$'
+   line: "    hostname: {{ newrelic_inode_plugin_hostname }}"
+
+- name: update the New Relic license key
+  lineinfile:
+   dest: "{{ newrelic_inode_plugin_destination }}/config/newrelic_plugin.yml"
+   regexp: '^.*license_key\:.*$'
+   line: "  license_key: {{ newrelic_inode_plugin_license_key }}"
+
+- name: Create Upstart config file for Ubuntu 14.04
+  template:
+    src: trusty_newrelic_inode_agent.conf
+    dest: /etc/init/newrelic_inode_agent.conf
+  when: ansible_distribution_release == 'trusty'
+
+- name: Install systemd config file
+  template:
+    src: xenial_newrelic_inode_agent.conf
+    dest: /lib/systemd/system/newrelic_inode_agent.service
+  when: ansible_distribution_release == 'xenial'
+
+- name: Reload any changes from the config file above
+  command: systemctl daemon-reload
+  when: ansible_distribution_release == 'xenial'
+
+- name: Enable the systemd service
+  command: systemctl enable newrelic_inode_agent.service
+  when: ansible_distribution_release == 'xenial'
+
+- name: Start the newly installed service
+  service:
+    name: newrelic_inode_agent
+    state: started
